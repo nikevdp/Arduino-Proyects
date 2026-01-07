@@ -1,53 +1,84 @@
-#include <Arduino.h>
-#include <AccelStepper.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESP32Servo.h>
 
-// Tus GPIO hacia IN1..IN4 del ULN2003
-static const int IN1 = 16;
-static const int IN2 = 17;
-static const int IN3 = 18;
-static const int IN4 = 23;
+// ===== CONFIG WIFI =====
+const char* ssid = "WIFINAME";
+const char* password = "password";
 
-// OJO: este orden es CLAVE y suele ser el correcto para 28BYJ-48 con ULN2003
-AccelStepper stepper(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
+static const int SERVO_PIN = 18;
+Servo servo;
+int servoAngle = 90;
 
-void setup() {
+// ===== SERVER =====
+WebServer server(80);
+
+// ===== HTML =====
+const char MAIN_page[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial; text-align: center; }
+    input { width: 80%; }
+  </style>
+</head>
+<body>
+  <h2>ESP32 Servo Control</h2>
+  <p>Angulo: <span id="val">90</span>°</p>
+  <input type="range" min="0" max="180" value="90"
+         oninput="update(this.value)">
+  <script>
+    function update(val) {
+      document.getElementById('val').innerText = val;
+      fetch('/set?angle=' + val);
+    }
+  </script>
+</body>
+</html>
+)rawliteral";
+
+// ===== HANDLERS =====
+void handleRoot() {
+  server.send(200, "text/html", MAIN_page);
+  }
+  
+ void handleSet() {
+  if (server.hasArg("angle")) {
+    servoAngle = server.arg("angle").toInt();
+    servoAngle = constrain(servoAngle, 0, 180);
+    servo.write(servoAngle);
+    }
+    
+   server.send(200, "text/plain", "OK");
+  }
+  
+  void setup() {
   Serial.begin(115200);
 
-  stepper.setMaxSpeed(800);      // probá 400..1000
-  stepper.setAcceleration(400);  // suave
-  Serial.println("Listo. Envia: cw 512 / ccw 512 / rev");
-}
+  // Servo
+  servo.setPeriodHertz(50);
+  servo.attach(SERVO_PIN, 500, 2400);
+  servo.write(servoAngle);
 
-String readLine() {
-  static String line;
-  while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (line.length()) { String out = line; line = ""; return out; }
-    } else line += c;
+  // WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando a WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+ }
+   Serial.println("\nConectado!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Server
+  server.on("/", handleRoot);
+  server.on("/set", handleSet);
+  server.begin();
   }
-  return "";
+  void loop() {
+  server.handleClient();
 }
 
-void loop() {
-  String cmd = readLine();
-  if (cmd.length()) {
-    cmd.trim(); cmd.toLowerCase();
-
-    if (cmd == "rev") {
-      stepper.move(4096); // 1 vuelta aprox
-    } else if (cmd.startsWith("cw")) {
-      long n = cmd.length() > 2 ? cmd.substring(2).toInt() : 512;
-      if (n == 0) n = 512;
-      stepper.move(abs(n));
-    } else if (cmd.startsWith("ccw")) {
-      long n = cmd.length() > 3 ? cmd.substring(3).toInt() : 512;
-      if (n == 0) n = 512;
-      stepper.move(-abs(n));
-    } else {
-      Serial.println("Comandos: cw 512 | ccw 512 | rev");
-    }
-  }
-
-  stepper.run();
-}
